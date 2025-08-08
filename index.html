@@ -1,287 +1,172 @@
-// FluxCore — a single-file generative 3D sculpture demonstrating shader-based
-// vertex displacement, instancing, and interactive controls.
-//
-// How to use:
-// - Drag to orbit, scroll to zoom.
-// - Use the control panel (top-right) to tweak parameters live.
-// - Click "Randomize" for a new seed.
-//
-// Libraries used: react, @react-three/fiber, @react-three/drei, leva, three
-// (No external assets; everything is procedural.)
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FluxCore — Generative 3D (No-build)</title>
+  <style>
+    html, body, #root { height: 100%; margin: 0; background: #0b0f14; }
+    .hud { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
 
-import React, { useMemo, useRef, useState, useEffect } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, Environment, Html } from "@react-three/drei";
-import * as THREE from "three";
-import { button, useControls } from "leva";
+  <script type="module">
+    import React from 'https://esm.sh/react@18.3.1?dev';
+    import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client?dev';
+    import * as THREE from 'https://esm.sh/three@0.160.1';
+    import { Canvas, useFrame } from 'https://esm.sh/@react-three/fiber@8.15.16?external=react,react-dom,three';
+    import { OrbitControls, Environment, Html } from 'https://esm.sh/@react-three/drei@9.114.6?external=react,react-dom,three,@react-three/fiber';
+    import htm from 'https://esm.sh/htm@3.1.1';
+    import { button, useControls, Leva } from 'https://esm.sh/leva@0.9.85?external=react,react-dom';
 
-// ----------------------- GLSL UTILS -----------------------
-const VERT = /* glsl */`
-  varying vec3 vPos;
-  varying vec3 vNormal;
-  varying float vNoise;
-  uniform float uTime;
-  uniform float uAmp;
-  uniform float uFreq;
-  uniform float uTwist;
-  uniform float uHueShift;
+    const html = htm.bind(React.createElement);
 
-  // 3D Simplex noise (Stefan Gustavson)
-  vec4 permute(vec4 x){ return mod(((x*34.0)+1.0)*x, 289.0); }
-  float snoise(vec3 v){
-    const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
-    const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
-    vec3 i  = floor(v + dot(v, C.yyy));
-    vec3 x0 = v - i + dot(i, C.xxx);
-    vec3 g = step(x0.yzx, x0.xyz);
-    vec3 l = 1.0 - g;
-    vec3 i1 = min( g.xyz, l.zxy );
-    vec3 i2 = max( g.xyz, l.zxy );
-    vec3 x1 = x0 - i1 + C.xxx;
-    vec3 x2 = x0 - i2 + C.yyy;
-    vec3 x3 = x0 - D.yyy;
-    i = mod(i, 289.0);
-    vec4 p = permute( permute( permute(
-              i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
-            + i.y + vec4(0.0, i1.y, i2.y, 1.0 ))
-            + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
-    float n_ = 1.0/7.0; //  N=7
-    vec3  ns = n_ * D.wyz - D.xzx;
-    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);  //  mod(p,N*N)
-    vec4 x_ = floor(j * ns.z);
-    vec4 y_ = floor(j - 7.0 * x_ );
-    vec4 x = x_ *ns.x + ns.yyyy;
-    vec4 y = y_ *ns.x + ns.yyyy;
-    vec4 h = 1.0 - abs(x) - abs(y);
-    vec4 b0 = vec4( x.xy, y.xy );
-    vec4 b1 = vec4( x.zw, y.zw );
-    vec4 s0 = floor(b0)*2.0 + 1.0;
-    vec4 s1 = floor(b1)*2.0 + 1.0;
-    vec4 sh = -step(h, vec4(0.0));
-    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
-    vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
-    vec3 p0 = vec3(a0.xy,h.x);
-    vec3 p1 = vec3(a0.zw,h.y);
-    vec3 p2 = vec3(a1.xy,h.z);
-    vec3 p3 = vec3(a1.zw,h.w);
-    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
-    p0 *= norm.x;
-    p1 *= norm.y;
-    p2 *= norm.z;
-    p3 *= norm.w;
-    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1),
-                            dot(x2,x2), dot(x3,x3)), 0.0);
-    m = m * m;
-    return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1),
-                                  dot(p2,x2), dot(p3,x3) ) );
-  }
-  vec3 hsv2rgb(vec3 c){
-    vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
-    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
-  }
+    const VERT = `
+      varying vec3 vPos; varying vec3 vNormal; varying float vNoise;
+      uniform float uTime; uniform float uAmp; uniform float uFreq; uniform float uTwist; uniform float uHueShift;
+      vec4 permute(vec4 x){ return mod(((x*34.0)+1.0)*x, 289.0); }
+      vec4 taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314 * r; }
+      float snoise(vec3 v){
+        const vec2 C = vec2(1.0/6.0, 1.0/3.0); const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+        vec3 i = floor(v + dot(v, C.yyy)); vec3 x0 = v - i + dot(i, C.xxx);
+        vec3 g = step(x0.yzx, x0.xyz); vec3 l = 1.0 - g; vec3 i1 = min(g.xyz, l.zxy); vec3 i2 = max(g.xyz, l.zxy);
+        vec3 x1 = x0 - i1 + C.xxx; vec3 x2 = x0 - i2 + C.yyy; vec3 x3 = x0 - D.yyy; i = mod(i, 289.0);
+        vec4 p = permute( permute( permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+        float n_ = 1.0/7.0; vec3 ns = n_ * D.wyz - D.xzx; vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+        vec4 x_ = floor(j * ns.z); vec4 y_ = floor(j - 7.0 * x_); vec4 x = x_ * ns.x + ns.yyyy; vec4 y = y_ * ns.x + ns.yyyy;
+        vec4 h = 1.0 - abs(x) - abs(y); vec4 b0 = vec4(x.xy, y.xy); vec4 b1 = vec4(x.zw, y.zw);
+        vec4 s0 = floor(b0) * 2.0 + 1.0; vec4 s1 = floor(b1) * 2.0 + 1.0; vec4 sh = -step(h, vec4(0.0));
+        vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy; vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+        vec3 p0 = vec3(a0.xy,h.x); vec3 p1 = vec3(a0.zw,h.y); vec3 p2 = vec3(a1.xy,h.z); vec3 p3 = vec3(a1.zw,h.w);
+        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+        p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0); m = m * m;
+        return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+      }
+      void main(){
+        vNormal = normalMatrix * normal; float t = uTime; float angle = position.y * uTwist;
+        mat3 rot = mat3(cos(angle),0.0,sin(angle), 0.0,1.0,0.0, -sin(angle),0.0,cos(angle));
+        vec3 pos = rot * position; float n = snoise(pos * uFreq + t*0.6); vNoise = n; pos += normal * (n * uAmp);
+        vPos = pos; gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+      }
+    `;
+    const FRAG = `
+      varying vec3 vPos; varying vec3 vNormal; varying float vNoise; uniform float uTime; uniform float uHueShift; uniform float uMetal; uniform float uRough;
+      vec3 hsv2rgb(vec3 c){ vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0); vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www); return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y); }
+      void main(){
+        vec3 N = normalize(vNormal); vec3 L = normalize(vec3(0.7, 0.9, 0.2)); vec3 V = normalize(vec3(0.0,0.0,1.0));
+        float diff = max(dot(N,L), 0.0); vec3 H = normalize(L+V); float spec = pow(max(dot(N,H), 0.0), mix(8.0, 64.0, 1.0 - uRough));
+        float hue = fract(uHueShift + vNoise*0.15 + 0.05*sin(uTime*0.4)); vec3 base = hsv2rgb(vec3(hue, 0.65, 0.95));
+        vec3 color = base * (0.2 + 0.8*diff) + spec * mix(0.1, 1.0, uMetal); gl_FragColor = vec4(color, 1.0);
+      }
+    `;
 
-  void main(){
-    vNormal = normalMatrix * normal;
-    float t = uTime;
-
-    // Twist along Y
-    float angle = position.y * uTwist;
-    mat3 rot = mat3(
-      cos(angle), 0.0, sin(angle),
-      0.0,        1.0, 0.0,
-      -sin(angle),0.0, cos(angle)
-    );
-
-    vec3 pos = (rot * position);
-    float n = snoise(pos * uFreq + t*0.6);
-    vNoise = n;
-    pos += normal * (n * uAmp);
-
-    vPos = pos;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-  }
-`;
-
-const FRAG = /* glsl */`
-  varying vec3 vPos;
-  varying vec3 vNormal;
-  varying float vNoise;
-  uniform float uTime;
-  uniform float uHueShift;
-  uniform float uMetal;
-  uniform float uRough;
-
-  vec3 hsv2rgb(vec3 c){
-    vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
-    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
-  }
-
-  void main(){
-    // Fake lighting
-    vec3 N = normalize(vNormal);
-    vec3 L = normalize(vec3(0.7, 0.9, 0.2));
-    vec3 V = normalize(vec3(0.0,0.0,1.0));
-    float diff = max(dot(N,L), 0.0);
-    vec3 H = normalize(L+V);
-    float spec = pow(max(dot(N,H), 0.0), mix(8.0, 64.0, 1.0 - uRough));
-
-    float hue = fract(uHueShift + vNoise*0.15 + 0.05*sin(uTime*0.4));
-    vec3 base = hsv2rgb(vec3(hue, 0.65, 0.95));
-
-    vec3 color = base * (0.2 + 0.8*diff) + spec * mix(0.1, 1.0, uMetal);
-    gl_FragColor = vec4(color, 1.0);
-  }
-`;
-
-// ----------------------- MATERIAL -----------------------
-function FluxMaterial({ uniformsRef }){
-  const materialRef = useRef();
-  useFrame(({ clock }) => {
-    if (!materialRef.current) return;
-    materialRef.current.uniforms.uTime.value = clock.getElapsedTime();
-  });
-  const uniforms = useMemo(() => ({
-    uTime: { value: 0 },
-    uAmp: { value: 0.35 },
-    uFreq: { value: 1.6 },
-    uTwist: { value: 0.9 },
-    uHueShift: { value: 0.0 },
-    uMetal: { value: 0.7 },
-    uRough: { value: 0.25 },
-  }), []);
-
-  // Expose to parent for live control
-  useEffect(() => {
-    if (uniformsRef) uniformsRef.current = uniforms;
-  }, [uniformsRef, uniforms]);
-
-  return (
-    <shaderMaterial ref={materialRef} attach="material" args={[{ vertexShader: VERT, fragmentShader: FRAG, uniforms }]} />
-  );
-}
-
-// ----------------------- SCULPTURE CORE -----------------------
-function FluxCoreMesh({ uniformsRef, seed }){
-  const meshRef = useRef();
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime();
-    meshRef.current.rotation.x = 0.25 + Math.sin(t * 0.25) * 0.1;
-    meshRef.current.rotation.y = t * 0.15;
-    meshRef.current.scale.setScalar(1.0 + 0.06 * Math.sin(t * 0.9 + seed));
-  });
-
-  return (
-    <mesh ref={meshRef} castShadow receiveShadow>
-      <torusKnotGeometry args={[1.1, 0.42, 420, 64, 3, 7]} />
-      <FluxMaterial uniformsRef={uniformsRef} />
-    </mesh>
-  );
-}
-
-// ----------------------- SWARM (instancing) -----------------------
-function Swarm({ count = 1200, radius = 5.5, seed = 0 }){
-  const ref = useRef();
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-  const rnd = useMemo(() => new Math.seedrandom?.(seed) || Math.random, [seed]);
-
-  const phases = useMemo(() =>
-    Float32Array.from({ length: count }, (_, i) => (i * 0.618 + seed) % (Math.PI * 2)),
-  [count, seed]);
-
-  useEffect(() => {
-    for (let i = 0; i < count; i++) {
-      const a = (i / count) * Math.PI * 2;
-      const r = radius * (0.85 + 0.25 * Math.sin(a * 5.0 + seed));
-      dummy.position.set(Math.cos(a) * r, (i % 40) * 0.03 - 0.6, Math.sin(a) * r);
-      dummy.updateMatrix();
-      ref.current.setMatrixAt(i, dummy.matrix);
+    function FluxMaterial({ uniformsRef }){
+      const ref = React.useRef();
+      const uniforms = React.useMemo(() => ({
+        uTime: { value: 0 }, uAmp: { value: 0.35 }, uFreq: { value: 1.6 }, uTwist: { value: 0.9 },
+        uHueShift: { value: 0.0 }, uMetal: { value: 0.7 }, uRough: { value: 0.25 }
+      }), []);
+      React.useEffect(() => { if (uniformsRef) uniformsRef.current = uniforms; }, [uniformsRef, uniforms]);
+      useFrame(({ clock }) => { if (ref.current) ref.current.uniforms.uTime.value = clock.getElapsedTime(); });
+      return html`<shaderMaterial ref=${ref} attach="material" args=${[{ vertexShader: VERT, fragmentShader: FRAG, uniforms }]} />`;
     }
-    ref.current.instanceMatrix.needsUpdate = true;
-  }, [count, radius, seed, dummy]);
 
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime();
-    for (let i = 0; i < count; i++) {
-      const a = phases[i] + t * 0.3;
-      const r = radius * (0.9 + 0.15 * Math.sin(a * 3.0));
-      dummy.position.set(Math.cos(a) * r, Math.sin(a * 0.9 + i * 0.005), Math.sin(a) * r);
-      dummy.rotation.set(Math.sin(a)*0.5, Math.cos(a*0.7)*0.5, Math.sin(a*1.3)*0.5);
-      const s = 0.03 + 0.02 * (0.5 + 0.5 * Math.sin(a*2.0 + t));
-      dummy.scale.set(s, s, s);
-      dummy.updateMatrix();
-      ref.current.setMatrixAt(i, dummy.matrix);
+    function FluxCoreMesh({ uniformsRef, seed }){
+      const meshRef = React.useRef();
+      useFrame(({ clock }) => {
+        const t = clock.getElapsedTime();
+        if (!meshRef.current) return;
+        meshRef.current.rotation.x = 0.25 + Math.sin(t * 0.25) * 0.1;
+        meshRef.current.rotation.y = t * 0.15;
+        meshRef.current.scale.setScalar(1.0 + 0.06 * Math.sin(t * 0.9 + seed));
+      });
+      return html`
+        <mesh ref=${meshRef} castShadow receiveShadow>
+          <torusKnotGeometry args=${[1.1, 0.42, 420, 64, 3, 7]} />
+          ${html`<${FluxMaterial} uniformsRef=${uniformsRef} />`}
+        </mesh>
+      `;
     }
-    ref.current.instanceMatrix.needsUpdate = true;
-  });
 
-  return (
-    <instancedMesh ref={ref} args={[null, null, count]}>
-      <icosahedronGeometry args={[1, 0]} />
-      <meshStandardMaterial metalness={0.6} roughness={0.2} />
-    </instancedMesh>
-  );
-}
+    function Swarm({ count = 900, radius = 5.5, seed = 0 }){
+      const ref = React.useRef();
+      const dummy = React.useMemo(() => new THREE.Object3D(), []);
+      const phases = React.useMemo(() => Float32Array.from({ length: count }, (_, i) => (i * 0.618 + seed) % (Math.PI * 2)), [count, seed]);
+      React.useEffect(() => {
+        if (!ref.current) return;
+        for (let i = 0; i < count; i++) {
+          const a = (i / count) * Math.PI * 2; const r = radius * (0.85 + 0.25 * Math.sin(a * 5.0 + seed));
+          dummy.position.set(Math.cos(a) * r, (i % 40) * 0.03 - 0.6, Math.sin(a) * r);
+          dummy.updateMatrix(); ref.current.setMatrixAt(i, dummy.matrix);
+        }
+        ref.current.instanceMatrix.needsUpdate = true;
+      }, [count, radius, seed, dummy]);
+      useFrame(({ clock }) => {
+        const t = clock.getElapsedTime(); if (!ref.current) return;
+        for (let i = 0; i < count; i++) {
+          const a = phases[i] + t * 0.3; const r = radius * (0.9 + 0.15 * Math.sin(a * 3.0));
+          dummy.position.set(Math.cos(a) * r, Math.sin(a * 0.9 + i * 0.005), Math.sin(a) * r);
+          dummy.rotation.set(Math.sin(a)*0.5, Math.cos(a*0.7)*0.5, Math.sin(a*1.3)*0.5);
+          const s = 0.03 + 0.02 * (0.5 + 0.5 * Math.sin(a*2.0 + t)); dummy.scale.set(s, s, s); dummy.updateMatrix();
+          ref.current.setMatrixAt(i, dummy.matrix);
+        }
+        ref.current.instanceMatrix.needsUpdate = true;
+      });
+      return html`
+        <instancedMesh ref=${ref} args=${[null, null, count]}>
+          <icosahedronGeometry args=${[1, 0]} />
+          <meshStandardMaterial metalness=${0.6} roughness=${0.2} />
+        </instancedMesh>
+      `;
+    }
 
-// ----------------------- UI WRAPPER -----------------------
-function Scene() {
-  const uniformsRef = useRef();
-  const [seed, setSeed] = useState(() => Math.random() * 9999);
+    function Scene(){
+      const uniformsRef = React.useRef();
+      const [seed, setSeed] = React.useState(() => Math.random() * 9999);
+      useControls('FluxCore', {
+        amplitude: { value: 0.35, min: 0.0, max: 1.2, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uAmp.value = v) },
+        frequency: { value: 1.6, min: 0.2, max: 4.0, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uFreq.value = v) },
+        twist: { value: 0.9, min: -2.0, max: 2.0, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uTwist.value = v) },
+        hueShift: { value: 0.0, min: 0.0, max: 1.0, step: 0.001, onChange: (v) => uniformsRef.current && (uniformsRef.current.uHueShift.value = v) },
+        metalness: { value: 0.7, min: 0.0, max: 1.0, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uMetal.value = v) },
+        roughness: { value: 0.25, min: 0.0, max: 1.0, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uRough.value = v) },
+        Randomize: button(() => setSeed(Math.random() * 9999)),
+      });
+      return html`
+        ${html`<color attach="background" args=${['#0b0f14']} />`}
+        ${html`<fog attach="fog" color="#0b0f14" near=${6} far=${22} />`}
+        ${html`<directionalLight position=${[5,6,3]} intensity=${2.0} castShadow shadow-mapSize-width=${1024} shadow-mapSize-height=${1024} />`}
+        ${html`<ambientLight intensity=${0.18} />`}
+        ${html`<group position=${[0,0,0]}>`}
+          ${html`<${FluxCoreMesh} uniformsRef=${uniformsRef} seed=${seed} />`}
+          ${html`<group rotation=${[0,0,0]}>`} ${html`<${Swarm} count=${900} radius=${5.4} seed=${Math.floor(seed)} />`} ${html`</group>`}
+        ${html`</group>`}
+        ${html`<mesh rotation=${[-Math.PI/2, 0, 0]} position=${[0,-2,0]} receiveShadow>`}
+          ${html`<circleGeometry args=${[18, 80]} />`}
+          ${html`<meshStandardMaterial metalness=${0.1} roughness=${0.9} color="#0a0e13" />`}
+        ${html`</mesh>`}
+        ${html`<${Environment} preset="city" />`}
+        ${html`<${OrbitControls} makeDefault enableDamping dampingFactor=${0.08} minDistance=${3} maxDistance=${18} />`}
+        ${html`<${Html} position=${[0, -1.75, 0]} center wrapperClass="hud">`}
+          ${html`<div style=${{ padding: '6px 10px', borderRadius: '999px', background: 'rgba(255,255,255,0.06)', backdropFilter: 'blur(6px)', fontSize: 12, color: '#cde3ff', letterSpacing: 0.5 }}>FluxCore — shader + instancing (No-build)</div>`}
+        ${html`</${Html}>`}
+        ${html`<${Leva} collapsed=${false} />`}
+      `;
+    }
 
-  const ctrl = useControls("FluxCore", {
-    amplitude: { value: 0.35, min: 0.0, max: 1.2, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uAmp.value = v) },
-    frequency: { value: 1.6, min: 0.2, max: 4.0, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uFreq.value = v) },
-    twist: { value: 0.9, min: -2.0, max: 2.0, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uTwist.value = v) },
-    hueShift: { value: 0.0, min: 0.0, max: 1.0, step: 0.001, onChange: (v) => uniformsRef.current && (uniformsRef.current.uHueShift.value = v) },
-    metalness: { value: 0.7, min: 0.0, max: 1.0, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uMetal.value = v) },
-    roughness: { value: 0.25, min: 0.0, max: 1.0, step: 0.01, onChange: (v) => uniformsRef.current && (uniformsRef.current.uRough.value = v) },
-    Randomize: button(() => setSeed(Math.random() * 9999)),
-  });
+    function App(){
+      return html`<div style=${{ width: '100%', height: '100%' }}>
+        ${html`<${Canvas} shadows camera=${{ position: [4, 2.5, 6], fov: 45 }}>
+          ${html`<${Scene} />`}
+        </${Canvas}>`}
+      </div>`;
+    }
 
-  return (
-    <>
-      <color attach="background" args={["#0b0f14"]} />
-      <fog attach="fog" color="#0b0f14" near={6} far={22} />
-
-      <directionalLight position={[5, 6, 3]} intensity={2.0} castShadow shadow-mapSize-width={1024} shadow-mapSize-height={1024} />
-      <ambientLight intensity={0.18} />
-
-      <group position={[0,0,0]}>
-        <FluxCoreMesh uniformsRef={uniformsRef} seed={seed} />
-        <group rotation={[0,0,0]}>
-          <Swarm count={900} radius={5.4} seed={Math.floor(seed)} />
-        </group>
-      </group>
-
-      <mesh rotation={[-Math.PI/2, 0, 0]} position={[0,-2,0]} receiveShadow>
-        <circleGeometry args={[18, 80]} />
-        <meshStandardMaterial metalness={0.1} roughness={0.9} color="#0a0e13" />
-      </mesh>
-
-      <Environment preset="city" />
-      <OrbitControls makeDefault enableDamping dampingFactor={0.08} minDistance={3} maxDistance={18} />
-
-      <Html position={[0, -1.75, 0]} center wrapperClass="hud">
-        <div style={{
-          padding: "6px 10px", borderRadius: 999,
-          background: "rgba(255,255,255,0.06)",
-          backdropFilter: "blur(6px)",
-          fontSize: 12, color: "#cde3ff", letterSpacing: 0.5,
-        }}>
-          FluxCore — shader + instancing (2025)
-        </div>
-      </Html>
-    </>
-  );
-}
-
-export default function App(){
-  return (
-    <div className="w-full h-[100vh]">
-      <Canvas shadows camera={{ position: [4, 2.5, 6], fov: 45 }}>
-        <Scene />
-      </Canvas>
-    </div>
-  );
-}
+    const root = createRoot(document.getElementById('root'));
+    root.render(html`<${App} />`);
+  </script>
+</body>
+</html>
